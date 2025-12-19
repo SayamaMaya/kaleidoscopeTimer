@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Kaleidoscope Timer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            margin: 0; 
+            padding: 0;
+            overflow: hidden; 
+            background-color: #000; 
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas { display: block; position: fixed; top: 0; left: 0; }
+        
+        /* UIの表示・非表示アニメーション */
+        .ui-element {
+            transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1), transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .ui-hidden {
+            opacity: 0 !important;
+            transform: translateY(20px);
+            pointer-events: none;
+        }
+        
+        .ui-overlay {
+            position: absolute;
+            top: env(safe-area-inset-top, 24px);
+            left: 24px;
+            color: rgba(255, 255, 255, 0.4);
+            z-index: 10;
+        }
+
+        .menu-trigger {
+            position: absolute;
+            top: env(safe-area-inset-top, 24px);
+            right: 24px;
+            z-index: 50;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .menu-trigger span {
+            width: 20px; height: 2px; background: white; border-radius: 2px; transition: 0.3s;
+        }
+        .menu-active span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+        .menu-active span:nth-child(2) { opacity: 0; }
+        .menu-active span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+        .side-panel {
+            position: fixed;
+            top: 0;
+            right: -300px;
+            width: 300px;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            z-index: 40;
+            transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            padding: 80px 24px 24px;
+            color: white;
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .side-panel.open { right: 0; }
+
+        .controls {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 24px) + 24px);
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 24px;
+            z-index: 20;
+            width: 90%;
+            max-width: 450px;
+        }
+        
+        /* タイマー表示は非表示対象から外すための設定 */
+        #timer-display {
+            font-size: 84px; font-weight: 100; color: white;
+            text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+            font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1;
+            transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+        .btn {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 99px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn.active { background: rgba(255, 255, 255, 0.25); border-color: rgba(255, 255, 255, 0.4); }
+
+        .ambient-item { margin-bottom: 24px; }
+        .ambient-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; opacity: 0.8; }
+        input[type="range"] { width: 100%; accent-color: white; opacity: 0.6; }
+
+        #press-indicator {
+            position: fixed; width: 80px; height: 80px;
+            border: 2px solid rgba(255, 255, 255, 0.2); border-radius: 50%;
+            transform: scale(0); pointer-events: none; z-index: 100; display: none;
+        }
+
+        input[type="number"] {
+            background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white; border-radius: 8px; padding: 4px 8px; width: 50px; text-align: center; outline: none;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="press-indicator"></div>
+
+    <!-- サイドパネルを開くボタン（非表示対象） -->
+    <div id="menuTrigger" class="menu-trigger ui-element">
+        <span></span><span></span><span></span>
+    </div>
+
+    <!-- サイドパネル（非表示対象） -->
+    <div id="sidePanel" class="side-panel">
+        <h2 class="text-xs font-bold uppercase tracking-widest mb-6 opacity-50">Ambient Sound</h2>
+        
+        <div class="ambient-item">
+            <div class="ambient-label"><span>Wind</span><span id="vol-wind-txt">0%</span></div>
+            <input type="range" id="vol-wind" min="0" max="100" value="0">
+        </div>
+        
+        <div class="ambient-item">
+            <div class="ambient-label"><span>Rain</span><span id="vol-rain-txt">0%</span></div>
+            <input type="range" id="vol-rain" min="0" max="100" value="0">
+        </div>
+
+        <div class="ambient-item">
+            <div class="ambient-label"><span>White Noise</span><span id="vol-noise-txt">0%</span></div>
+            <input type="range" id="vol-noise" min="0" max="100" value="0">
+        </div>
+
+        <div class="mt-8 border-t border-white/10 pt-6">
+            <h2 class="text-xs font-bold uppercase tracking-widest mb-4 opacity-50">Timer Sound</h2>
+            <button class="btn w-full" onclick="playPororonSound()">Test "Pororon!"</button>
+        </div>
+    </div>
+
+    <!-- 画面左上のタイトル（非表示対象） -->
+    <div id="overlay" class="ui-overlay ui-element">
+        <h1 class="text-xs font-bold uppercase tracking-[0.2em] mb-1">Kaleidoscope Focus</h1>
+        <p id="mode-label" class="text-[9px] opacity-70">画面長押しでUI表示切替</p>
+    </div>
+
+    <!-- コントロールエリア -->
+    <div id="controls" class="controls">
+        <div class="flex flex-col items-center gap-4 w-full">
+            <!-- タイマー表示（ui-elementクラスを除去し、常に表示） -->
+            <div id="timer-display">25:00</div>
+            
+            <!-- 操作用ボタン群（非表示対象） -->
+            <div class="ui-element flex flex-col items-center gap-4 w-full" id="interactive-ui">
+                <div class="btn-group" id="timer-modes">
+                    <button class="btn active" onclick="setTimerMode('pomodoro')">Pomodoro</button>
+                    <button class="btn" onclick="setTimerMode('custom')">Custom</button>
+                </div>
+
+                <div id="custom-input-area" class="hidden flex items-center gap-2 text-white text-xs">
+                    <input type="number" id="custom-min" value="10" min="1" max="999"> <span>min</span>
+                    <button class="btn" onclick="applyCustomTime()">Set</button>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn" id="startStopBtn">Start</button>
+                    <button class="btn" id="resetTimerBtn">Reset</button>
+                </div>
+
+                <div class="btn-group opacity-40 hover:opacity-100 transition-opacity">
+                    <button class="btn" id="resetVisualBtn">Visual Reset</button>
+                    <button class="btn" id="changeSlices">Mirror: 12</button>
+                    <button class="btn" id="toggleAuto">Spin: ON</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 万華鏡ロジック ---
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        document.body.appendChild(canvas);
+        let width, height, slices = 12, angle = 0, autoRotate = true;
+        let mouseX = 0, mouseY = 0, targetX = 0, targetY = 0, hueOffset = Math.random() * 360;
+        let points = [];
+        const pointCount = 8;
+
+        function initPoints() {
+            points = [];
+            for (let i = 0; i < pointCount; i++) {
+                points.push({
+                    x: (Math.random() - 0.5) * 220, y: (Math.random() - 0.5) * 220,
+                    vx: (Math.random() - 0.5) * 1.6, vy: (Math.random() - 0.5) * 1.6
+                });
+            }
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            mouseX = targetX = width / 2; mouseY = targetY = height / 2;
+        }
+
+        function drawShape() {
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                const xc = (points[i].x + points[i - 1].x) / 2;
+                const yc = (points[i].y + points[i - 1].y) / 2;
+                ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+            }
+            ctx.closePath();
+            const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 300);
+            grad.addColorStop(0, `hsla(${hueOffset}, 80%, 60%, 0.4)`);
+            grad.addColorStop(0.5, `hsla(${(hueOffset + 40) % 360}, 70%, 50%, 0.15)`);
+            grad.addColorStop(1, `hsla(${(hueOffset + 80) % 360}, 60%, 40%, 0)`);
+            ctx.fillStyle = grad; ctx.fill();
+            ctx.strokeStyle = `hsla(${hueOffset}, 100%, 80%, 0.3)`;
+            ctx.lineWidth = 1.5; ctx.stroke();
+        }
+
+        function animate() {
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, width, height);
+            points.forEach(p => {
+                p.x += p.vx; p.y += p.vy;
+                if (Math.sqrt(p.x * p.x + p.y * p.y) > 300) { p.vx -= p.x * 0.0012; p.vy -= p.y * 0.0012; }
+            });
+            hueOffset += 0.3; if (autoRotate) angle += 0.004;
+            mouseX += (targetX - mouseX) * 0.08; mouseY += (targetY - mouseY) * 0.08;
+            ctx.save(); ctx.translate(width / 2, height / 2); ctx.rotate(angle);
+            const sliceAngle = (Math.PI * 2) / slices;
+            for (let i = 0; i < slices; i++) {
+                ctx.save(); ctx.rotate(i * sliceAngle);
+                if (i % 2 === 1) ctx.scale(1, -1);
+                ctx.translate((mouseX - width / 2) * 0.3, (mouseY - height / 2) * 0.3);
+                drawShape(); ctx.restore();
+            }
+            ctx.restore(); requestAnimationFrame(animate);
+        }
+
+        // --- オーディオエンジン ---
+        let audioCtx = null;
+        const soundSources = {};
+
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        function createNoiseBuffer(type) {
+            const bufferSize = audioCtx.sampleRate * 2;
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = buffer.getChannelData(0);
+            let lastOut = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                if (type === 'white') {
+                    output[i] = Math.random() * 2 - 1;
+                } else if (type === 'pink') {
+                    const white = Math.random() * 2 - 1;
+                    output[i] = (lastOut + (0.02 * white)) / 1.02;
+                    lastOut = output[i];
+                    output[i] *= 3.5;
+                }
+            }
+            return buffer;
+        }
+
+        function setupAmbient(id, type) {
+            initAudio();
+            const source = audioCtx.createBufferSource();
+            source.buffer = createNoiseBuffer(type);
+            source.loop = true;
+            
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+            
+            const filter = audioCtx.createBiquadFilter();
+            if (id === 'wind') { filter.type = 'lowpass'; filter.frequency.value = 800; }
+            else if (id === 'rain') { filter.type = 'bandpass'; filter.frequency.value = 600; }
+            
+            source.connect(filter);
+            filter.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            source.start();
+            soundSources[id] = gainNode;
+        }
+
+        function updateVolume(id, val) {
+            initAudio();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (!soundSources[id]) {
+                const type = (id === 'noise') ? 'white' : 'pink';
+                setupAmbient(id, type);
+            }
+            const volume = parseFloat(val) / 100;
+            soundSources[id].gain.setTargetAtTime(volume, audioCtx.currentTime, 0.05);
+            document.getElementById(`vol-${id}-txt`).innerText = `${val}%`;
+        }
+
+        // 通知音：「ぽろろん！」
+        function playPororonSound() {
+            initAudio();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const t = audioCtx.currentTime;
+            const freqs = [523.25, 659.25, 783.99, 987.77];
+            freqs.forEach((freq, i) => {
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                const delay = i * 0.08;
+                const duration = 1.2;
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, t + delay);
+                g.gain.setValueAtTime(0, t + delay);
+                g.gain.linearRampToValueAtTime(0.15 - (i * 0.02), t + delay + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.001, t + delay + duration);
+                osc.connect(g);
+                g.connect(audioCtx.destination);
+                osc.start(t + delay);
+                osc.stop(t + delay + duration);
+            });
+            hueOffset = (hueOffset + 90) % 360;
+            initPoints();
+        }
+
+        ['wind', 'rain', 'noise'].forEach(id => {
+            const el = document.getElementById(`vol-${id}`);
+            if(el) el.addEventListener('input', (e) => updateVolume(id, e.target.value));
+        });
+
+        // --- タイマー ---
+        let timerSeconds = 25 * 60, initialSeconds = 25 * 60, timerInterval = null;
+        const timerDisplay = document.getElementById('timer-display');
+        const startStopBtn = document.getElementById('startStopBtn');
+
+        function updateTimerDisplay() {
+            const m = Math.floor(timerSeconds / 60); const s = timerSeconds % 60;
+            timerDisplay.innerText = `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function setTimerMode(mode) {
+            clearInterval(timerInterval); timerInterval = null; startStopBtn.innerText = 'Start';
+            document.querySelectorAll('#timer-modes .btn').forEach(b => b.classList.toggle('active', b.innerText.toLowerCase() === mode));
+            if (mode === 'pomodoro') {
+                timerSeconds = 25 * 60; document.getElementById('custom-input-area').classList.add('hidden');
+                document.getElementById('mode-label').innerText = "Pomodoro Focus (25m)";
+            } else {
+                document.getElementById('custom-input-area').classList.remove('hidden'); applyCustomTime();
+                document.getElementById('mode-label').innerText = "Custom Timer";
+            }
+            initialSeconds = timerSeconds; updateTimerDisplay();
+        }
+
+        function applyCustomTime() {
+            const val = parseInt(document.getElementById('custom-min').value);
+            if (val > 0) { timerSeconds = val * 60; initialSeconds = timerSeconds; updateTimerDisplay(); }
+        }
+
+        startStopBtn.addEventListener('click', () => {
+            initAudio();
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; startStopBtn.innerText = 'Start'; }
+            else {
+                startStopBtn.innerText = 'Pause';
+                timerInterval = setInterval(() => {
+                    if (timerSeconds > 0) { timerSeconds--; updateTimerDisplay(); }
+                    else { 
+                        clearInterval(timerInterval); timerInterval = null; 
+                        startStopBtn.innerText = 'Start';
+                        playPororonSound(); 
+                    }
+                }, 1000);
+            }
+        });
+
+        document.getElementById('resetTimerBtn').addEventListener('click', () => {
+            clearInterval(timerInterval); timerInterval = null; startStopBtn.innerText = 'Start';
+            timerSeconds = initialSeconds; updateTimerDisplay();
+        });
+
+        // --- UI制御 ---
+        const menuTrigger = document.getElementById('menuTrigger');
+        const sidePanel = document.getElementById('sidePanel');
+        menuTrigger.addEventListener('click', () => {
+            menuTrigger.classList.toggle('menu-active'); sidePanel.classList.toggle('open');
+        });
+
+        let isPressing = false; let pressTimer = null;
+        const indicator = document.getElementById('press-indicator');
+
+        function startPress(x, y) {
+            if (sidePanel.classList.contains('open')) return;
+            isPressing = true; indicator.style.display = 'block';
+            indicator.style.left = (x - 40) + 'px'; indicator.style.top = (y - 40) + 'px';
+            indicator.style.transform = 'scale(0)'; indicator.style.transition = 'transform 1s ease-out';
+            requestAnimationFrame(() => indicator.style.transform = 'scale(1)');
+            pressTimer = setTimeout(() => { if (isPressing) { toggleUI(); cancelPress(); } }, 1000);
+        }
+
+        function cancelPress() { isPressing = false; clearTimeout(pressTimer); indicator.style.display = 'none'; }
+        
+        function toggleUI() {
+            const isHidden = document.getElementById('interactive-ui').classList.contains('ui-hidden');
+            const targetVisible = isHidden; // 今隠れているなら次は表示する
+
+            // ui-element クラスを持つものすべてを切り替え
+            document.querySelectorAll('.ui-element').forEach(el => {
+                el.classList.toggle('ui-hidden', !targetVisible);
+            });
+
+            // タイマーの表示位置を微調整（UIが消えた時に少し中央に寄せるなど）
+            const timer = document.getElementById('timer-display');
+            if (!targetVisible) {
+                // UIが非表示の時
+                timer.style.transform = 'translateY(40px)';
+            } else {
+                // UIが表示の時
+                timer.style.transform = 'translateY(0)';
+            }
+        }
+
+        window.addEventListener('mousedown', (e) => {
+            if (e.target.closest('button') || e.target.closest('input') || e.target.closest('#sidePanel')) return;
+            startPress(e.clientX, e.clientY);
+        });
+        window.addEventListener('mouseup', cancelPress);
+        window.addEventListener('mousemove', (e) => {
+            targetX = e.clientX; targetY = e.clientY;
+            if (isPressing) {
+                const dx = e.clientX - (parseInt(indicator.style.left) + 40);
+                const dy = e.clientY - (parseInt(indicator.style.top) + 40);
+                if (Math.sqrt(dx*dx + dy*dy) > 50) cancelPress();
+            }
+        });
+        window.addEventListener('touchstart', (e) => {
+            if (e.target.closest('button') || e.target.closest('input') || e.target.closest('#sidePanel')) return;
+            const t = e.touches[0]; startPress(t.clientX, t.clientY);
+        }, { passive: true });
+        window.addEventListener('touchend', cancelPress);
+        window.addEventListener('touchmove', (e) => {
+            const t = e.touches[0]; targetX = t.clientX; targetY = t.clientY;
+        }, { passive: true });
+
+        document.getElementById('resetVisualBtn').addEventListener('click', () => { hueOffset = Math.random() * 360; initPoints(); });
+        document.getElementById('changeSlices').addEventListener('click', (e) => {
+            const opts = [8, 12, 16, 24, 32];
+            slices = opts[(opts.indexOf(slices) + 1) % opts.length];
+            e.target.innerText = `Mirror: ${slices}`;
+        });
+        document.getElementById('toggleAuto').addEventListener('click', (e) => {
+            autoRotate = !autoRotate; e.target.innerText = autoRotate ? 'Spin: ON' : 'Spin: OFF';
+        });
+
+        window.addEventListener('resize', resize);
+        resize(); initPoints(); updateTimerDisplay(); animate();
+    </script>
+</body>
+</html>
